@@ -1,0 +1,7 @@
+iptables -A FORWARD -s 10.8.0.0/24  -i tun+ -o eth0 -d 172.16.16.0/20 -j DROP  #drop conection for ip range 
+
+iptables -I FORWARD 2 -s 10.8.0.0/24  -i tun+ -o eth0 -d 172.16.18.136/32 -p tcp --dport 443 -j ACCEPT  #accept acces to ip to port 443
+
+iptables -D FORWARD -s 10.8.0.0/24  -i tun+ -o eth0 -d 172.16.18.136/32 -j ACCEPT
+
+iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE # naskarade traffic with ip range 

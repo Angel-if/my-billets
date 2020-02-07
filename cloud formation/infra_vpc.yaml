@@ -1,0 +1,384 @@
+# CloudFormation Network Layer: Network part - VPC, Subnets + RouteTables, Internet + NAT Gateways. Server part - EFS, RDS, EC2
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Network, EC2 Cluster, RDS + EFS "
+
+Metadata:
+ AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Network Configuration"
+        Parameters:
+          - Environment
+          - VPCBlock
+      -
+        Label:
+          default: "Subnets CIDR Blocks"
+        Parameters:
+          - PublicSubnetACIDR
+          - PublicSubnetBCIDR
+          - PrivateSubnetACIDR
+          - PrivateSubnetBCIDR
+Mappings:
+  AMI2RegionMap:
+    ap-southeast-1	:
+      '64': ami-08a046a53280446ff
+
+Parameters:
+#-----Network part-----
+  Environment:
+    Type: String
+    Default: "torlo-vpc-cform"
+
+  VPCBlock:
+    Type: String
+    Default: '10.0.0.0/16'
+
+  PublicSubnetACIDR:
+    Type: String
+    Default: '10.0.100.0/24'
+    Description: "torlo-cform-pub-1a"
+
+  PublicSubnetBCIDR:
+    Type: String
+    Default: '10.0.200.0/24'
+    Description: "torlo-cform-pub-1b"
+
+  PrivateSubnetACIDR:
+    Type: String
+    Default: '10.0.110.0/24'
+    Description: "torlo-cform-pri-1a"
+
+  PrivateSubnetBCIDR:
+    Type: String
+    Default: '10.0.210.0/24'
+    Description: "torlo-cform-pri-1b"
+#-----EC2 part-----
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: torlov.test
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+    - t2.nano
+    - t2.micro
+    - t2.small
+
+
+
+
+Resources:
+#-----VPC-----
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref Environment
+
+#-----IGW-----
+  IGW:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: name
+          Value: !Ref Environment
+
+  AttachIGW: #-----Attach IGW to VPC-----
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    DependsOn: IGW
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+#-----Public Route Tables-----
+  PubRT: #-----Creation empty RT-----
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ " ", [ !Ref Environment, "PublicRouteTable"] ]
+
+  DefroutePubRT: #-----Def routes for pubRT-----
+    Type: "AWS::EC2::Route"
+    DependsOn: AttachIGW
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+      RouteTableId: !Ref PubRT
+
+#-----Priv RT-----
+  PriRT:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ " ", [!Ref Environment, "PrivateRT" ] ]
+
+#-----Configure NAT GW -----
+
+  EIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn : AttachIGW
+    Properties:
+      Domain: vpc
+
+  NATGw:
+    DependsOn: AttachIGW
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      AllocationId: !GetAtt EIP.AllocationId
+      Tags:
+        - Key: Name
+          Value: NatGateway
+
+
+  DefroutePriRT: #-----Def route table for PRIV RT-----
+    Type: AWS::EC2::Route
+    DependsOn: NATGw
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref PriRT
+      NatGatewayId:  !Ref NATGw
+#-----Def RT to subnets-----
+  RouteAssociationPublicA:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PubRT
+      SubnetId: !Ref PublicSubnetA
+
+  RouteAssociationPublicB:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PubRT
+      SubnetId: !Ref PublicSubnetB
+
+  RouteAssociationPrivA:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PriRT
+      SubnetId: !Ref PrivateSubnetA
+
+  RouteAssociationPrivB:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PriRT
+      SubnetId: !Ref PrivateSubnetB
+
+#-----Subnets------
+
+  PublicSubnetA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, "Fn::GetAZs": { Ref: "AWS::Region" } ]
+      CidrBlock: !Ref "PublicSubnetACIDR"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref Environment, "-Public-A" ] ]
+
+  PublicSubnetB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, "Fn::GetAZs": { Ref: "AWS::Region" } ]
+      CidrBlock: !Ref "PublicSubnetBCIDR"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref Environment, "-Public-B" ] ]
+
+  PrivateSubnetA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, "Fn::GetAZs": { Ref: "AWS::Region" } ]
+      CidrBlock: !Ref "PrivateSubnetACIDR"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref Environment, "-Private-A" ] ]
+
+  PrivateSubnetB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, "Fn::GetAZs": { Ref: "AWS::Region" } ]
+      CidrBlock: !Ref "PrivateSubnetBCIDR"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref Environment, "-Private-B" ] ]
+#-----Server's side-----
+#-----EFS-----
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        !Ref VPC
+      GroupDescription: Grant access to EFS
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '2049'
+        ToPort: '2049'
+        CidrIp: 10.0.0.0/16
+
+  EFSCreateFS:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: false
+      FileSystemTags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref Environment, "-EFS" ] ]
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  EFSMountPrivA:
+    Type: AWS::EFS::MountTarget
+    DependsOn: PrivateSubnetA
+    Properties:
+      FileSystemId: !Ref EFSCreateFS
+      SecurityGroups:
+        - Ref: EFSSecurityGroup
+      SubnetId: !Ref PrivateSubnetA
+
+  EFSMountPrivB:
+    Type: AWS::EFS::MountTarget
+    DependsOn: PrivateSubnetB
+    Properties:
+      FileSystemId: !Ref EFSCreateFS
+      SecurityGroups:
+        - Ref: EFSSecurityGroup
+      SubnetId: !Ref PrivateSubnetB
+
+#-----RDS-----
+  RDSAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Instance to RDS Access
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Join [ "", [ !Ref Environment, "-SG" ] ]
+  AccessSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: RDSAccessSecurityGroup
+    Properties:
+      GroupId: !Ref RDSAccessSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref RDSAccessSecurityGroup
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Join [ "", [ "RDS Subnet Group for ", !Ref Environment ] ]
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+      - Key: Name
+        Value: !Ref "AWS::StackName"
+  CreateDB:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    DependsOn:
+    - DbSubnetGroup
+    - RDSAccessSecurityGroup
+    Properties:
+      DBSnapshotIdentifier: arn:aws:rds:ap-southeast-1:004829846714:snapshot:torlo-wp-snapshot
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: false
+      BackupRetentionPeriod: 3
+      DBInstanceClass: db.t2.micro
+      DBInstanceIdentifier: !Join [ "", [ !Ref Environment, "-DB" ] ]
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      MultiAZ: false
+      Port: 3306
+      PreferredBackupWindow: 17:00-19:00
+      PreferredMaintenanceWindow: Sun:19:00-Sun:23:00
+      PubliclyAccessible: false
+      StorageEncrypted: false
+      StorageType: gp2
+      VPCSecurityGroups:
+      - !Ref RDSAccessSecurityGroup
+
+#-----EC2-----
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      Tags:
+      - Key: Name
+        Value:
+          !Join [ "", [ !Ref Environment, "-ASG" ] ]
+        PropagateAtLaunch: 'true'
+      LaunchConfigurationName:
+        Ref: LaunchConfiguration
+      MinSize: 2
+      MaxSize: 2
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: CreateDB
+    Properties:
+      KeyName:
+        Ref: KeyName
+      ImageId: ami-07661db7dd9ee7ead
+      SecurityGroups:
+      - Ref: InstanceSecurityGroup
+      - Ref: SSHSecurityGroup
+      InstanceType: !Ref InstanceType
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash -x
+              sed -i 's/fs-08641049/${EFSCreateFS}/' /etc/fstab
+              mount -a
+              rm -rf /var/www/html/wordpress/*
+              cp /var/tmp/wpress.tar /var/www/html/wordpress/
+              cd /var/www/html/wordpress/ && tar -xf wpress.tar
+              sed -i 's/wordpress.clcdzbtif9io.ap-southeast-1.rds.amazonaws.com/${DBEndpointAddress}/' /var/www/html/wordpress/wp-config.php
+            - DBEndpointAddress: !GetAtt CreateDB.Endpoint.Address
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        !Ref VPC
+      GroupDescription: Enable HTTP and HTTPS
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '443'
+        ToPort: '443'
+        CidrIp: 0.0.0.0/0
+
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        !Ref VPC
+      GroupDescription: Enable SSH access
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 10.0.0.0/16
